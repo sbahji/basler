@@ -33,6 +33,7 @@
 #include <limits>
 #include "lima/HwMaxImageSizeCallback.h"
 #include "lima/HwBufferMgr.h"
+#include "lima/HwEventCtrlObj.h"
 #include "BaslerCompatibility.h"
 
 using namespace Pylon;
@@ -55,8 +56,10 @@ using namespace Basler_GigEStreamParams;
 #error Camera type is not specified. For example, define USE_GIGE for using GigE cameras
 #endif
 
-
-
+#define REPORT_EVENT(desc) { \
+    Event *my_event = new Event(Hardware,Event::Info, Event::Camera, Event::Default,desc); \
+    m_cam.getEventCtrlObj()->reportEvent(my_event);  \					
+} \
 
 namespace lima
 {
@@ -105,6 +108,7 @@ class LIBBASLER_API Camera
     
     // -- Buffer control object
     HwBufferCtrlObj* getBufferCtrlObj();
+    HwEventCtrlObj* getEventCtrlObj();
     
     //-- Synch control object
     void setTrigMode(TrigMode  mode);
@@ -187,6 +191,7 @@ class LIBBASLER_API Camera
     static const int NB_COLOR_BUFFER = 2;
     //- lima stuff
     SoftBufferCtrlObj		m_buffer_ctrl_obj;
+    HwEventCtrlObj            m_event_ctrl_obj;
     int                         m_nb_frames;    
     Camera::Status              m_status;
     volatile bool               m_wait_flag;
@@ -217,7 +222,7 @@ class LIBBASLER_API Camera
     bool			  m_color_flag;
     bool			  m_video_flag_mode;
     void*			  m_color_buffer[NB_COLOR_BUFFER];
-    VideoCtrlObj*		  m_video;
+    VideoCtrlObj*		  m_video;    
     TrigMode			  m_trigger_mode;
 };
 } // namespace Basler

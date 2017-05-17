@@ -654,12 +654,15 @@ void Camera::_AcqThread::threadFunction()
                             else if (Failed == Result.Status())
                             {
                                 // Error handling
-                                DEB_ERROR() << "No image acquired!"
+								std::stringstream msg_error("");
+								msg_error	<< "No image acquired!"
                                             << " Error code : 0x"
                                             << DEB_VAR1(hex)<< " "
                                             << Result.GetErrorCode()
                                             << " Error description : "
                                             << Result.GetErrorDescription();
+								
+                                DEB_ERROR() <<msg_error.str();
                                 
                                 if(!m_cam.m_nb_frames) //Do not stop acquisition in "live" mode, just IGNORE  error
                                 {
@@ -668,7 +671,8 @@ void Camera::_AcqThread::threadFunction()
                                 else            //in "snap" mode , acquisition must be stopped
                                 {
                                     m_cam._setStatus(Camera::Fault,false);
-                                    continueAcq = false;
+									REPORT_EVENT(msg_error.str())
+                                    continueAcq = false;									
                                 }
                             }
                         break;
@@ -677,9 +681,12 @@ void Camera::_AcqThread::threadFunction()
                 else
                 {
                     // Timeout
-                    DEB_ERROR() << "Timeout occurred!";
-                    m_cam._setStatus(Camera::Fault,false);
-                    continueAcq = false;
+					std::stringstream msg_error("");					
+					msg_error <<"Timeout occurred!";
+                    DEB_ERROR() << msg_error.str();
+                    m_cam._setStatus(Camera::Fault,false);						
+					REPORT_EVENT(msg_error.str())
+                    continueAcq = false;					
                 }
             }
             m_cam._stopAcq(true);
@@ -687,7 +694,10 @@ void Camera::_AcqThread::threadFunction()
         catch (GenICam::GenericException &e)
         {
             // Error handling
-            DEB_ERROR() << "GeniCam Error! "<< e.GetDescription();
+			std::stringstream msg_error("");
+			msg_error<<"GeniCam Error! "<< e.GetDescription();
+            DEB_ERROR() << msg_error.str();
+			REPORT_EVENT(msg_error.str())
         }
         aLock.lock();
         m_cam.m_wait_flag = true;
@@ -849,6 +859,14 @@ void Camera::getDetectorModel(string& type)
 HwBufferCtrlObj* Camera::getBufferCtrlObj()
 {
     return &m_buffer_ctrl_obj;
+}
+
+//-----------------------------------------------------
+//
+//-----------------------------------------------------
+HwEventCtrlObj* Camera::getEventCtrlObj()
+{
+	return &m_event_ctrl_obj;
 }
 
 //-----------------------------------------------------
