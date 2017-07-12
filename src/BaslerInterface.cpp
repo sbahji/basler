@@ -53,7 +53,12 @@ Interface::Interface(Camera& cam,bool force_video_mode) :
       m_video = new VideoCtrlObj(cam);
     }
   else
+  {
     m_video = NULL;
+  }
+  //event capability
+  m_event = m_cam.getEventCtrlObj();
+ 
 }
 
 Interface::~Interface()
@@ -88,6 +93,9 @@ void Interface::getCapList(CapList &cap_list) const
 
   if(m_cam.isBinningAvailable())
     cap_list.push_back(HwCap(m_bin));
+  
+  //event capability
+  cap_list.push_back(HwCap(m_event));	   
 }
 
 void Interface::reset(ResetLevel reset_level)
