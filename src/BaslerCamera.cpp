@@ -803,29 +803,29 @@ void Camera::setImageType(ImageType type)
     DEB_MEMBER_FUNCT();
     try
     {
-        if((GenApi::IsAvailable(Camera_->PixelFormat) && GenApi::IsWritable(Camera_->PixelFormat)))
-        {		
-			switch( type )
-			{
-				case Bpp8:
-					this->Camera_->PixelFormat.SetValue(PixelFormat_Mono8);
-				break;
-				case Bpp12:
-			  this->Camera_->PixelFormat.SetValue(PixelFormat_Mono12);
-				break;
-				case Bpp16:
-					this->Camera_->PixelFormat.SetValue(PixelFormat_Mono16);
-				break;
-				  
-				default:
-					THROW_HW_ERROR(NotSupported) << "Cannot change the format of the camera !";
-				break;
-			}
+        if ((GenApi::IsAvailable(Camera_->PixelFormat) && GenApi::IsWritable(Camera_->PixelFormat)))
+        {
+            switch( type )
+            {
+                case Bpp8:
+                    this->Camera_->PixelFormat.SetValue(PixelFormat_Mono8);
+                    break;
+                case Bpp12:
+                    this->Camera_->PixelFormat.SetValue(PixelFormat_Mono12);
+                    break;
+                case Bpp16:
+                    this->Camera_->PixelFormat.SetValue(PixelFormat_Mono16);
+                    break;
+
+                default:
+                    THROW_HW_ERROR(NotSupported) << "Cannot change the pixel format of the camera !";
+                    break;
+            }
         }
         else
         {
-            DEB_TRACE()<<"PixelFormat is Not Available or/and Not Writable !";
-        }		
+            DEB_TRACE() << "PixelFormat is Not Available or/and Not Writable !";
+        }
     }
     catch (GenICam::GenericException &e)
     {
@@ -976,6 +976,50 @@ void Camera::_readTrigMode()
     }        
    	
     DEB_RETURN() << DEB_VAR4(m_trigger_mode,acqStart, frameStart, expMode);
+}
+
+//-----------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::setTrigActivation(TrigActivation activation)
+{
+    DEB_MEMBER_FUNCT();
+    try
+    {
+        Basler_GigECamera::TriggerActivationEnums act =
+            static_cast<Basler_GigECamera::TriggerActivationEnums>(activation);
+
+        // If the parameter TriggerActivation is available for this camera
+        if (GenApi::IsAvailable(Camera_->TriggerActivation))
+            Camera_->TriggerActivation.SetValue(act);
+    }
+    catch (GenICam::GenericException &e)
+    {
+        DEB_WARNING() << e.GetDescription();
+    }
+}
+
+//-----------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::getTrigActivation(TrigActivation& activation) const
+{
+    DEB_MEMBER_FUNCT();
+    try
+    {
+        Basler_GigECamera::TriggerActivationEnums act;
+
+        // If the parameter AcquisitionFrameCount is available for this camera
+        if (GenApi::IsAvailable(Camera_->TriggerActivation))
+            act = Camera_->TriggerActivation.GetValue();
+
+        activation = static_cast<TrigActivation>(act);
+
+    }
+    catch (GenICam::GenericException &e)
+    {
+        DEB_WARNING() << e.GetDescription();
+    }
 }
 
 //-----------------------------------------------------
@@ -1408,7 +1452,7 @@ void Camera::getBin(Bin &aBin)
     DEB_MEMBER_FUNCT();
     try
     {
-    	aBin = Bin(Camera_->BinningVertical.GetValue(), Camera_->BinningHorizontal.GetValue());
+      aBin = Bin(Camera_->BinningHorizontal.GetValue(), Camera_->BinningVertical.GetValue());
     }
     catch (GenICam::GenericException &e)
     {
@@ -1602,7 +1646,15 @@ void Camera::getCurrentThroughput(int& ipd)
         DEB_WARNING() << e.GetDescription();
     }
 }    
-    
+
+//-----------------------------------------------------
+// isTemperatureAvailable
+//-----------------------------------------------------
+bool Camera::isTemperatureAvailable() const
+{
+    return GenApi::IsAvailable(Camera_->TemperatureAbs);
+}
+
 //-----------------------------------------------------
 //
 //-----------------------------------------------------
@@ -1877,6 +1929,43 @@ void Camera::getOutput1LineSource(Camera::LineSource& source) const
 
   DEB_RETURN() << DEB_VAR1(source);
 }
+
+//-----------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::setAcquisitionFrameCount(int AFC)
+{
+    DEB_MEMBER_FUNCT();
+    try
+    {
+        // If the parameter AcquisitionFrameCount is available for this camera
+        if (GenApi::IsAvailable(Camera_->AcquisitionFrameCount))
+            Camera_->AcquisitionFrameCount.SetValue(AFC);
+    }
+    catch (GenICam::GenericException &e)
+    {
+        DEB_WARNING() << e.GetDescription();
+    }
+}
+
+//-----------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::getAcquisitionFrameCount(int& AFC) const
+{
+    DEB_MEMBER_FUNCT();
+    try
+    {
+        // If the parameter AcquisitionFrameCount is available for this camera
+        if (GenApi::IsAvailable(Camera_->AcquisitionFrameCount))
+           AFC = Camera_->AcquisitionFrameCount.GetValue();
+    }
+    catch (GenICam::GenericException &e)
+    {
+        DEB_WARNING() << e.GetDescription();
+    }
+}
+
 //---------------------------
 // The Total Buffer Count will count the number of all buffers with "status == succeeded" and "status == failed". 
 // That means, all successfully and all incompletely grabbed (error code: 0xE1000014) buffers. 
