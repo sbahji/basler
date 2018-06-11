@@ -1,0 +1,37 @@
+
+stages:
+  - build
+  - test
+
+build :
+  stage: build
+  script:
+    - cd ..
+    - cp -R /root/* .
+    - ./install_lima_submodule
+    - tar zxvf lib_for_lima/pylon-5.0.1.6388-x86_64.tar.gz
+    - cd pylon-5.0.1.6388-x86_64
+    - tar -C /opt -xzf pylonSDK*.tar.gz
+    - cd ../lima/camera/basler
+    - cp -R ../../../lima-camera-basler/* .
+    - cd ../..
+    - ./install.sh camera/basler python tests cbf fits tiff hdf5 config
+    - cd ../lima-camera-basler
+    - cp -R ../lima .
+  artifacts:
+    paths:
+    - lima/
+  only:
+    - cmake
+    
+test :
+  stage: test
+  dependencies:
+    - build
+  script:
+    - cd ..
+    - cp -R lima-camera-basler/lima .
+    - cd lima/cmake-build/
+    - ctest --timeout 10
+  only:
+    - cmake
