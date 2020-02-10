@@ -31,11 +31,7 @@
             <groupId>com.basler</groupId>
             <artifactId>Pylon-${aol}-shared-${mode}</artifactId>
             <version>5.0.5</version>
-        </dependency>
-        <!-- <dependency>
-            <groupId>ncsa.uiuc.edu</groupId>
-            <artifactId>HDF5-${aol}-shared-release</artifactId>
-        </dependency>   -->      
+        </dependency> 
     </dependencies>
 
     <build>
@@ -52,38 +48,11 @@
                         <defines>
                             <define>USE_GIGE</define>
                         </defines>
-<!-- 						<systemIncludePaths>
-                            <systemIncludePath>/usr/Local/pylonSDK/pylon5/include</systemIncludePath>
-                        </systemIncludePaths> -->
                         <!-- define less verbose mode for gcc-->
                         <options>
                             <option>-w</option>
                         </options>
                     </cpp>
-<!-- 					<linker>
-						<libs>
-							<lib>
-								<name>pylonbase-5.0.5</name>
-								<type>shared</type>
-								<directory>/usr/Local/pylonSDK/pylon5/lib/</directory>
-							</lib>
-							<lib>
-								<name>GenApi_gcc_v3_0_Basler_pylon_v5_0</name>
-								<type>shared</type>
-								<directory>/usr/Local/pylonSDK/pylon5/lib/</directory>
-							</lib>
-							<lib>
-								<name>GCBase_gcc_v3_0_Basler_pylon_v5_0</name>
-								<type>shared</type>
-								<directory>/usr/Local/pylonSDK/pylon5/lib/</directory>
-							</lib>
-							<lib>
-								<name>Log_gcc_v3_0_Basler_pylon_v5_0</name>
-								<type>shared</type>
-								<directory>/usr/Local/pylonSDK/pylon5/lib/</directory>
-							</lib>								
-						</libs>
-					</linker> -->
                     <libraries>
                         <library>
                             <type>shared</type>
