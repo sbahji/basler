@@ -1243,7 +1243,7 @@ void Camera::getStatus(Camera::Status& status)
 	// Read the acquisition status
 	bool IsWaitingForFrameTrigger = Camera_->AcquisitionStatus.GetValue();
 	status = IsWaitingForFrameTrigger ? Camera::Ready : status;
-	DEB_TRACE() << DEB_VAR1(IsWaitingForFrameTrigger);
+	//DEB_TRACE() << DEB_VAR1(IsWaitingForFrameTrigger);
       }
     DEB_RETURN() << DEB_VAR1(status);
 }
