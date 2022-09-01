@@ -47,18 +47,13 @@ Interface::Interface(Camera& cam,bool force_video_mode) :
 	// for greyscale camera but for having true video interface
 	// with gain/autogain and other true video features available
 	// one can force here for video interface.
-	m_cam._allocColorBuffer();
-	m_cam._initColorStreamGrabber();
+	DEB_ALWAYS() << "Ok force video cap. for a B/W camera";
+	m_cam._forceVideoMode(true);
       }
       m_video = new VideoCtrlObj(cam);
     }
   else
-  {
     m_video = NULL;
-  }
-  //event capability
-  m_event = m_cam.getEventCtrlObj();
- 
 }
 
 Interface::~Interface()
@@ -93,9 +88,6 @@ void Interface::getCapList(CapList &cap_list) const
 
   if(m_cam.isBinningAvailable())
     cap_list.push_back(HwCap(m_bin));
-  
-  //event capability
-  cap_list.push_back(HwCap(m_event));	   
 }
 
 void Interface::reset(ResetLevel reset_level)

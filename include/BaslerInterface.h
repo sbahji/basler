@@ -24,7 +24,7 @@
 
 #include "BaslerCompatibility.h"
 #include "lima/HwInterface.h"
-#include "lima/HwEventCtrlObj.h"
+//#include "lima/HwEventCtrlObj.h"
 
 
 namespace lima
@@ -65,7 +65,6 @@ namespace lima
       RoiCtrlObj*	m_roi;
       BinCtrlObj*	m_bin;
       VideoCtrlObj*     m_video;
-      HwEventCtrlObj*  	m_event;
       mutable Cond	m_cond;
     };
   } // namespace Basler

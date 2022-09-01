@@ -22,6 +22,9 @@
 #ifndef BASLERCAMERA_H
 #define BASLERCAMERA_H
 
+#include <stdlib.h>
+#include <limits>
+
 #if defined (__GNUC__) && (__GNUC__ == 3) && defined (__ELF__)
 #   define GENAPI_DECL __attribute__((visibility("default")))
 #   define GENAPI_DECL_ABSTRACT __attribute__((visibility("default")))
@@ -37,29 +40,12 @@
 #include "BaslerCompatibility.h"
 
 using namespace Pylon;
-using namespace std;
 
-#if defined( USE_1394 )
-// Settings to use  Basler 1394 cameras
-#include <pylon/1394/Basler1394Camera.h>
-typedef Pylon::CBasler1394Camera Camera_t;
-using namespace Basler_IIDC1394CameraParams;
-using namespace Basler_IIDC1394StreamParams;
+#include <pylon/BaslerUniversalInstantCamera.h>
+typedef CBaslerUniversalInstantCamera Camera_t;
+using namespace Basler_UniversalCameraParams;
+using namespace Basler_UniversalStreamParams;
 
-#elif defined ( USE_GIGE )
-// settings to use Basler GigE cameras
-#include <pylon/gige/BaslerGigECamera.h>
-typedef Pylon::CBaslerGigECamera Camera_t;
-using namespace Basler_GigECameraParams;
-using namespace Basler_GigEStreamParams;
-#else
-#error Camera type is not specified. For example, define USE_GIGE for using GigE cameras
-#endif
-
-#define REPORT_EVENT(desc) { \
-    Event *my_event = new Event(Hardware,Event::Info, Event::Camera, Event::Default,desc); \
-    m_cam.getEventCtrlObj()->reportEvent(my_event);  \					
-} \
 
 namespace lima
 {
@@ -92,13 +78,24 @@ class LIBBASLER_API Camera
     };
 
     enum TrigActivation {
-        RisingEdge=Basler_GigECamera::TriggerActivation_RisingEdge,
-        FallingEdge=Basler_GigECamera::TriggerActivation_FallingEdge,
-        AnyEdge=Basler_GigECamera::TriggerActivation_AnyEdge,
-        LevelHigh=Basler_GigECamera::TriggerActivation_LevelHigh,
-        LevelLow=Basler_GigECamera::TriggerActivation_LevelLow
+        RisingEdge=TriggerActivation_RisingEdge,
+        FallingEdge=TriggerActivation_FallingEdge,
+        AnyEdge=TriggerActivation_AnyEdge,
+        LevelHigh=TriggerActivation_LevelHigh,
+        LevelLow=TriggerActivation_LevelLow
     };
 
+    enum TestImageSelector {
+      TestImage_Off=TestImageSelector_Off,
+      TestImage_1=TestImageSelector_Testimage1,
+      TestImage_2=TestImageSelector_Testimage2,
+      TestImage_3=TestImageSelector_Testimage3,
+      TestImage_4=TestImageSelector_Testimage4,
+      TestImage_5=TestImageSelector_Testimage5,
+      TestImage_6=TestImageSelector_Testimage6,
+      TestImage_7=TestImageSelector_Testimage7,
+    };
+    
     Camera(const std::string& camera_id,int packet_size = -1,int received_priority = 0);
     ~Camera();
 
@@ -116,7 +113,6 @@ class LIBBASLER_API Camera
     
     // -- Buffer control object
     HwBufferCtrlObj* getBufferCtrlObj();
-    HwEventCtrlObj* getEventCtrlObj();
     
     //-- Synch control object
     void setTrigMode(TrigMode  mode);
@@ -182,63 +178,75 @@ class LIBBASLER_API Camera
     void hasVideoCapability(bool& video_flag) const;
 
     // -- change output line source
-    void setOutput1LineSource(LineSource);
-    void getOutput1LineSource(LineSource&) const;
+    void setOutput1LineSource(LineSource src);
+    void getOutput1LineSource(LineSource& src) const;
 
     // -- change acq frame count
     void setAcquisitionFrameCount(int AFC);
     void getAcquisitionFrameCount(int& AFC) const;
 
+    // -- change AcquisitionFrameRateEnable
+    void setAcquisitionFrameRateEnable(bool AFRE);
+    void getAcquisitionFrameRateEnable(bool& AFRE) const;
+
+    // -- change acq frame count
+    void setAcquisitionFrameRateAbs(int AFRA);
+    void getAcquisitionFrameRateAbs(int& AFRA) const;
+
     // -- Pylon buffers statistics
     void getStatisticsTotalBufferCount(long& count);    
     void getStatisticsFailedBufferCount(long& count);
+
+    // -- Pylon test image selectors
+    void setTestImageSelector(TestImageSelector sel);
+    void getTestImageSelector(TestImageSelector& sel) const;
     
  private:
+    enum BufferMode {TmpBuffer, SoftBuffer};
     class _AcqThread;
     friend class _AcqThread;
     void _stopAcq(bool);
     void _setStatus(Camera::Status status,bool force);
-    void _freeStreamGrabber();
-    void _allocColorBuffer();
-    void _initColorStreamGrabber();
+    void _allocTmpBuffer();
     void _startAcq();
     void _readTrigMode();
+    void _forceVideoMode(bool force);
 
-    static const int NB_COLOR_BUFFER = 2;
+    static const int NB_TMP_BUFFER = 2;
+    
     //- lima stuff
     SoftBufferCtrlObj		m_buffer_ctrl_obj;
-    HwEventCtrlObj            m_event_ctrl_obj;
     int                         m_nb_frames;    
     Camera::Status              m_status;
     volatile bool               m_wait_flag;
     volatile bool               m_quit;
     volatile bool               m_thread_running;
+    bool                        m_acq_started;
     int                         m_image_number;
     double                      m_exp_time;
     int                         m_timeout;
     double                      m_latency_time;
     int                         m_socketBufferSize;
+    bool                        m_is_usb;
     
     //- basler stuff 
-    string                      m_camera_id;
-    string                      m_detector_model;
-    string                      m_detector_type;
+    std::string                 m_camera_id;
+    std::string                 m_detector_model;
+    std::string                 m_detector_type;
     Size                        m_detector_size;
     
     //- Pylon stuff
     PylonAutoInitTerm             auto_init_term_;
     DeviceInfoList_t              devices_;
     Camera_t*                     Camera_;
-    Camera_t::StreamGrabber_t*    StreamGrabber_;
-    WaitObjectEx                  WaitObject_;
     size_t                        ImageSize_;
     _AcqThread*                   m_acq_thread;
     Cond                          m_cond;
     int                           m_receive_priority;
     bool			  m_color_flag;
     bool			  m_video_flag_mode;
-    void*			  m_color_buffer[NB_COLOR_BUFFER];
-    VideoCtrlObj*		  m_video;    
+    void*			  m_tmp_buffer[NB_TMP_BUFFER];
+    VideoCtrlObj*		  m_video;
     TrigMode			  m_trigger_mode;
 };
 } // namespace Basler

@@ -72,7 +72,6 @@ static inline const char* _get_ip_addresse(const char *name_ip)
     }
 }
 
-
 //---------------------------
 //- utility thread
 //---------------------------
@@ -106,8 +105,8 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
           m_timeout(DEFAULT_TIME_OUT),
           m_latency_time(0.),
           m_socketBufferSize(0),
+          m_is_usb(false),
           Camera_(NULL),
-          StreamGrabber_(NULL),
           m_receive_priority(receive_priority),
 	  m_video_flag_mode(false),
 	  m_video(NULL)
@@ -121,7 +120,7 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
         DEB_TRACE() << "Create a camera object of type Camera_t::DeviceClass()";
         CTlFactory& TlFactory = CTlFactory::GetInstance();
 
-        CBaslerGigEDeviceInfo di;
+        CDeviceInfo di;
 
 	// by default use ip:// scheme if none is given
 	if (m_camera_id.find("://") == std::string::npos)
@@ -154,12 +153,12 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
             DEB_TRACE() << "Create the Pylon device attached to user name: "
 			<< DEB_VAR1(m_camera_id);
  	}
+
 	else 
         {
 	    THROW_CTL_ERROR(InvalidValue) << "Unrecognized camera id: " << camera_id;
-        }
-
-        IPylonDevice* device = TlFactory.CreateDevice( di);
+        }  
+        IPylonDevice* device = CTlFactory::GetInstance().CreateFirstDevice(di);
         if (!device)
         {
             THROW_HW_ERROR(Error) << "Unable to find camera with selected IP!";
@@ -176,6 +175,7 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
         //- Get detector model and type
         m_detector_type  = Camera_->GetDeviceInfo().GetVendorName();
         m_detector_model = Camera_->GetDeviceInfo().GetModelName();
+        m_is_usb = Camera_->GetDeviceInfo().IsUsbDriverTypeAvailable();
 
         //- Infos:
         DEB_TRACE() << DEB_VAR2(m_detector_type,m_detector_model);
@@ -191,15 +191,19 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
         DEB_TRACE() << "Open camera";        
         Camera_->Open();
     
-        if(packet_size > 0)
-          Camera_->GevSCPSPacketSize.SetValue(packet_size);
+        if(packet_size > 0 && !m_is_usb) {
+          Camera_->GevSCPSPacketSize.SetValue(1000);
+
+        }
     
         // Set the image format and AOI
         DEB_TRACE() << "Set the image format and AOI";
 	// basler model string last character codes for color (c) or monochrome (m)
 	std::list<string> formatList;
 
-	if (m_detector_model.find("gc") != std::string::npos)
+	if (m_detector_model.find("gc") != std::string::npos ||
+	    m_detector_model.find("uc") != std::string::npos
+	    )
 	  {
 	    // The list Order here has sense, if supported, the first format in the list will be applied
 	    // as default one, and in case of color camera the default will defined the max buffer
@@ -237,7 +241,6 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
         }
         if(!formatSetFlag)
             THROW_HW_ERROR(Error) << "Unable to set PixelFormat for the camera!";
-        
         DEB_TRACE() << "Set the ROI to full frame";
 	if(isRoiAvailable())
 	  {
@@ -257,40 +260,46 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
 
         // Set the camera to continuous frame mode
         DEB_TRACE() << "Set the camera to continuous frame mode";
-        Camera_->TriggerSelector.SetValue(TriggerSelector_AcquisitionStart);
         Camera_->AcquisitionMode.SetValue(AcquisitionMode_Continuous);
-        
-        if ( GenApi::IsAvailable(Camera_->ExposureAuto ))
+        if ( IsAvailable(Camera_->ExposureAuto ))
         {
             DEB_TRACE() << "Set ExposureAuto to Off";           
             Camera_->ExposureAuto.SetValue(ExposureAuto_Off);
         }
+
+	if (IsAvailable(Camera_->TestImageSelector ))
+	{
+            DEB_TRACE() << "Set TestImage to Off";           
+            Camera_->TestImageSelector.SetValue(TestImageSelector_Off);	  
+	}
 	// Start with internal trigger
-	// Force cache variable to get trigger really initialized at first call
+	// Force cache variable (camera register) to get trigger really initialized at first call
 	m_trigger_mode = ExtTrigSingle;
 	setTrigMode(IntTrig);
+	// Same thing for exposure time, camera stays with previous setting
+	double min_exp, max_exp;
+	getExposureTimeRange(min_exp, max_exp);
+	//fast basler models do not support 1.0 second exposure but lower value
+	double exp_time = min(1.0, max_exp);
+	setExpTime(exp_time);
         // Get the image buffer size
         DEB_TRACE() << "Get the image buffer size";
         ImageSize_ = (size_t)(Camera_->PayloadSize.GetValue());
-           
-        WaitObject_ = WaitObjectEx::Create();
-    
+               
         m_acq_thread = new _AcqThread(*this);
         m_acq_thread->start();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
-    if(m_color_flag) {
-      _allocColorBuffer();
-    }
-    else
-      {
-	for(int i = 0;i < NB_COLOR_BUFFER;++i)
-	  m_color_buffer[i] = NULL;
-      }
+
+    // if color camera video capability will be available
+    m_video_flag_mode = m_color_flag;
+    
+    // alloc a temporary buffer used for live mode and color camera
+    _allocTmpBuffer();
 }
 
 //---------------------------
@@ -305,23 +314,18 @@ Camera::~Camera()
         delete m_acq_thread;
         m_acq_thread = NULL;
         
-        // Close stream grabber
-        DEB_TRACE() << "Close stream grabber";
-	_freeStreamGrabber();
-
         // Close camera
         DEB_TRACE() << "Close camera";
         delete Camera_;
         Camera_ = NULL;
-	if (m_video_flag_mode)
-	  for(int i = 0;i < NB_COLOR_BUFFER;++i)
+	for(int i = 0;i < NB_TMP_BUFFER;++i)
 #ifdef __unix
-	    free(m_color_buffer[i]);
+	  free(m_tmp_buffer[i]);
 #else
-	_aligned_free(m_color_buffer[i]);
+	  _aligned_free(m_tmp_buffer[i]);
 #endif
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -332,71 +336,12 @@ void Camera::prepareAcq()
 {
     DEB_MEMBER_FUNCT();
     m_image_number=0;
-
-    if(m_video_flag_mode)
-      return;			// Nothing to do if color camera
-
-    try
-    {
-	_freeStreamGrabber();
-        // Get the first stream grabber object of the selected camera
-        DEB_TRACE() << "Get the first stream grabber object of the selected camera";
-        StreamGrabber_ = new Camera_t::StreamGrabber_t(Camera_->GetStreamGrabber(0));
-	//Change priority to m_receive_priority
-	if(m_receive_priority > 0)
-	  {
-	    StreamGrabber_->ReceiveThreadPriorityOverride.SetValue(true);
-	    StreamGrabber_->ReceiveThreadPriority.SetValue(m_receive_priority);
-	  }
-        // Set Socket Buffer Size
-        DEB_TRACE() << "Set Socket Buffer Size";
-        if (m_socketBufferSize >0 )
-        {
-            StreamGrabber_->SocketBufferSize.SetValue(m_socketBufferSize);
-          }
-        // Open the stream grabber
-        DEB_TRACE() << "Open the stream grabber";
-        StreamGrabber_->Open();
-        if(!StreamGrabber_->IsOpen())
-        {
-            delete StreamGrabber_;
-            StreamGrabber_ = NULL;
-            THROW_HW_ERROR(Error) << "Unable to open the steam grabber!";
-        }
-        // We won't use image buffers greater than ImageSize
-        DEB_TRACE() << "We won't use image buffers greater than ImageSize";
-        StreamGrabber_->MaxBufferSize.SetValue((const size_t)ImageSize_);
-
-        StdBufferCbMgr& buffer_mgr = m_buffer_ctrl_obj.getBuffer();
-        // We won't queue more than c_nBuffers image buffers at a time
-        int nb_buffers;
-        buffer_mgr.getNbBuffers(nb_buffers);
-        DEB_TRACE() << "We'll queue " << nb_buffers << " image buffers";
-        StreamGrabber_->MaxNumBuffer.SetValue(nb_buffers);
-
-        // Allocate all resources for grabbing. Critical parameters like image
-        // size now must not be changed until FinishGrab() is called.
-        DEB_TRACE() << "Allocate all resources for grabbing, PrepareGrab";
-        StreamGrabber_->PrepareGrab();
-
-        // Put buffer into the grab queue for grabbing
-        DEB_TRACE() << "Put buffer into the grab queue for grabbing";
-        for(int i = 0;i < nb_buffers;++i)
-        {
-            void *ptr = buffer_mgr.getFrameBufferPtr(i);
-            // The registration returns a handle to be used for queuing the buffer.
-            StreamBufferHandle bufferId = StreamGrabber_->RegisterBuffer(ptr,(const size_t)ImageSize_);
-            StreamGrabber_->QueueBuffer(bufferId, NULL);
-        }
-	if(m_trigger_mode == IntTrigMult)
-	  _startAcq();
-    }
-    catch (GenICam::GenericException &e)
-    {
-        // Error handling
-        THROW_HW_ERROR(Error) << e.GetDescription();
-    }
+    // new flag to better manage multiple acqStart() with trigger mode IntTrigMult
+    // startAcq can be recalled before the threadFunction has processed the new image and
+    // incremented the counter m_image_number
+    m_acq_started = false;
 }
+
 //---------------------------
 //- Camera::start()
 //---------------------------
@@ -405,19 +350,26 @@ void Camera::startAcq()
     DEB_MEMBER_FUNCT();
     try
     {
-	if(!m_image_number)
+	if(!m_acq_started)
 	  {
 	    if(m_video)
 	      m_video->getBuffer().setStartTimestamp(Timestamp::now());
 	    else
 	      m_buffer_ctrl_obj.getBuffer().setStartTimestamp(Timestamp::now());
 	  }
+	// start acquisition at first image
+	// code moved from prepareAcq(), otherwise with color camera
+	// CtVideo::_prepareAcq() which calls stopAcq() will kill the acquisition 
 	if(m_trigger_mode == IntTrigMult)
 	  {
+	    if (!m_acq_started)
+	      _startAcq();
+
 	    this->Camera_->TriggerSoftware.Execute();
 	  }
-	else
-	_startAcq();
+	else {	  
+	  _startAcq();
+	}
     }
     catch (GenICam::GenericException &e)
     {
@@ -429,16 +381,16 @@ void Camera::startAcq()
 void Camera::_startAcq()
 {
   DEB_MEMBER_FUNCT();
-
-  if(m_video_flag_mode)
-    _initColorStreamGrabber();
-  
-  Camera_->AcquisitionStart.Execute();
-
-  //Start acqusition thread
+  if (m_nb_frames)
+    Camera_->StartGrabbing(m_nb_frames);
+  else
+    Camera_->StartGrabbing();
+    
   AutoMutex aLock(m_cond.mutex());
   m_wait_flag = false;
   m_cond.broadcast();
+
+  m_acq_started = true;
 }
 //---------------------------
 //- Camera::stopAcq()
@@ -457,93 +409,53 @@ void Camera::_stopAcq(bool internalFlag)
     try
     {
         AutoMutex aLock(m_cond.mutex());
+
         if(m_status != Camera::Ready)
         {
+            // Stop acquisition
+            DEB_TRACE() << "Stop acquisition";
+            Camera_->StopGrabbing();
             while(!internalFlag && m_thread_running)
             {
                 m_wait_flag = true;
-                WaitObject_.Signal();
                 m_cond.wait();
             }
             aLock.unlock();
-
-            //Let the acq thread stop the acquisition
-            if(!internalFlag) return;
-            
-            // Stop acquisition
-            DEB_TRACE() << "Stop acquisition";
-            Camera_->AcquisitionStop.Execute();
-	    
-	    // always free for both video or acquisition
-	    _freeStreamGrabber();
+        
             _setStatus(Camera::Ready,false);
         }
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }    
 }
 
-void Camera::_freeStreamGrabber()
-{
-  DEB_MEMBER_FUNCT();
-  if(StreamGrabber_)
-    {
-      // Get the pending buffer back (You are not allowed to deregister
-      // buffers when they are still queued)
-      StreamGrabber_->CancelGrab();
-    
-      // Get all buffers back
-      for (GrabResult r; StreamGrabber_->RetrieveResult(r););
-    
-      // Free all resources used for grabbing
-      DEB_TRACE() << "Free all resources used for grabbing";
-      StreamGrabber_->FinishGrab();
-      StreamGrabber_->Close();
-      delete StreamGrabber_;
-      StreamGrabber_ = NULL;         
-    }
-}
 
-void Camera::_allocColorBuffer()
+void Camera::_forceVideoMode(bool force)
 {
   DEB_MEMBER_FUNCT();
-  for(int i = 0;i < NB_COLOR_BUFFER;++i)
+  m_video_flag_mode = force;
+  
+}
+void Camera::_allocTmpBuffer()
+{
+  DEB_MEMBER_FUNCT();
+  for(int i = 0;i < NB_TMP_BUFFER;++i)
     {
 #ifdef __unix
-      posix_memalign(&m_color_buffer[i],16,ImageSize_);
+      int ret=posix_memalign(&m_tmp_buffer[i],16,ImageSize_);
+      if (ret)
+	THROW_HW_ERROR(Error) << "posix_memalign(): request for aligned memory allocation failed";
 #else
-      m_color_buffer[i] = _aligned_malloc(ImageSize_,16);
+      m_tmp_buffer[i] = _aligned_malloc(ImageSize_,16);
+      if (m_tmp_buffer[i] == NULL)
+	THROW_HW_ERROR(Error) << "_aligned_malloc(): request for aligned memory allocation failed";	
 #endif
-      m_video_flag_mode = true;
     }
 }
 
-void Camera::_initColorStreamGrabber()
-{
-  DEB_MEMBER_FUNCT();
-
-  StreamGrabber_ = new Camera_t::StreamGrabber_t(Camera_->GetStreamGrabber(0));
-  StreamGrabber_->Open();
-  if(!StreamGrabber_->IsOpen())
-    {
-      delete StreamGrabber_;
-      StreamGrabber_ = NULL;
-      THROW_HW_ERROR(Error) << "Unable to open the steam grabber!";
-    }
-  StreamGrabber_->MaxBufferSize.SetValue((const size_t)ImageSize_);
-  StreamGrabber_->MaxNumBuffer.SetValue(NB_COLOR_BUFFER);
-  StreamGrabber_->PrepareGrab();
-
-  for(int i = 0;i < NB_COLOR_BUFFER;++i)
-    {
-      StreamBufferHandle bufferId = StreamGrabber_->RegisterBuffer(m_color_buffer[i],
-								   (const size_t)ImageSize_);
-      StreamGrabber_->QueueBuffer(bufferId,NULL);
-    }
-}
 
 //---------------------------
 //- Camera::_AcqThread::threadFunction()
@@ -558,147 +470,80 @@ void Camera::_AcqThread::threadFunction()
     {
         while(m_cam.m_wait_flag && !m_cam.m_quit)
         {
-          DEB_TRACE() << "Wait";
-          m_cam.m_thread_running = false;
-          m_cam.m_cond.broadcast();
-          m_cam.m_cond.wait();
-        }
-        DEB_TRACE() << "Run";
-        m_cam.m_thread_running = true;
-        if(m_cam.m_quit) return;
-    
-        m_cam.m_status = Camera::Exposure;
-        m_cam.m_cond.broadcast();
-        aLock.unlock();
+            DEB_TRACE() << "Wait";
+            m_cam.m_thread_running = false;
+            m_cam.m_cond.broadcast();
+            m_cam.m_cond.wait();
+	}
+	DEB_TRACE() << "Run";
+	m_cam.m_thread_running = true;
+	if(m_cam.m_quit) return;
+        
+	m_cam.m_status = Camera::Exposure;
+	m_cam.m_cond.broadcast();
+	aLock.unlock();
 
-        try
-        {
-            WaitObjects waitset;
-            waitset.Add(m_cam.WaitObject_);
-            waitset.Add(m_cam.StreamGrabber_->GetWaitObject());
-    
-            bool continueAcq = true;
-            while(continueAcq && (!m_cam.m_nb_frames || m_cam.m_image_number < m_cam.m_nb_frames))
-            {
-	      m_cam._setStatus(Camera::Exposure,false);
-                unsigned int event_number;
-                if(waitset.WaitForAny(m_cam.m_timeout,&event_number)) // Wait m_timeout
-                {
-                    switch(event_number)
-                    {
-                        case 0:    // event
-                            DEB_TRACE() << "Receive Event";
-                            m_cam.WaitObject_.Reset();
-                            aLock.lock();
-                            continueAcq = !m_cam.m_wait_flag && !m_cam.m_quit;
-                            aLock.unlock();
-                        break;
-                        case 1:
-                            // Get the grab result from the grabber's result queue
-                            GrabResult Result;
-                            m_cam.StreamGrabber_->RetrieveResult(Result);
-                            if (Grabbed == Result.Status())
-                            {
-                                // Grabbing was successful, process image
-                                m_cam._setStatus(Camera::Readout,false);
-                                DEB_TRACE()  << "image#" << DEB_VAR1(m_cam.m_image_number) <<" acquired !";
-				if(!m_cam.m_video_flag_mode)
-				  {
-				    int nb_buffers;
-				    buffer_mgr.getNbBuffers(nb_buffers);
-				    if (!m_cam.m_nb_frames || 
-					m_cam.m_image_number < int(m_cam.m_nb_frames - nb_buffers))
-				      m_cam.StreamGrabber_->QueueBuffer(Result.Handle(),NULL);
-                                
-				    HwFrameInfoType frame_info;
-				    frame_info.acq_frame_nb = m_cam.m_image_number;
-				    continueAcq = buffer_mgr.newFrameReady(frame_info);
-				    DEB_TRACE() << DEB_VAR1(continueAcq);
-				  }
-				else
-				  {
-				    m_cam.StreamGrabber_->QueueBuffer(Result.Handle(),NULL);
-				    VideoMode mode;
-				    switch(Result.GetPixelType())
-				      {
-				      case PixelType_Mono8:		mode = Y8;		break;
-				      case PixelType_Mono10: 		mode = Y16;		break;
-				      case PixelType_Mono12:  		mode = Y16;		break;
-				      case PixelType_Mono16:  		mode = Y16;		break;
-				      case PixelType_BayerRG8:  	mode = BAYER_RG8;	break;
-				      case PixelType_BayerBG8: 		mode = BAYER_BG8;	break;  
-				      case PixelType_BayerRG10:  	mode = BAYER_RG16;	break;
-				      case PixelType_BayerBG10:    	mode = BAYER_BG16;	break;
-				      case PixelType_BayerRG12:    	mode = BAYER_RG16;	break;
-				      case PixelType_BayerBG12:      	mode = BAYER_BG16;	break;
-				      case PixelType_RGB8packed:  	mode = RGB24;		break;
-				      case PixelType_BGR8packed:  	mode = BGR24;		break;
-				      case PixelType_RGBA8packed:  	mode = RGB32;		break;
-				      case PixelType_BGRA8packed:  	mode = BGR32;		break;
-				      case PixelType_YUV411packed:  	mode = YUV411PACKED;	break;
-				      case PixelType_YUV422packed:  	mode = YUV422PACKED;	break;
-				      case PixelType_YUV444packed:  	mode = YUV444PACKED;	break;
-				      case PixelType_BayerRG16:    	mode = BAYER_RG16;	break;
-				      case PixelType_BayerBG16:    	mode = BAYER_BG16;	break;
-				      default:
-					DEB_ERROR() << "Image type not managed";
-					return;
-				      }
-				    m_cam.m_video->callNewImage((char*)Result.Buffer(),
-								Result.GetSizeX(),
-								Result.GetSizeY(),
-								mode);
-				  }
-                                ++m_cam.m_image_number;
-                            }
-                            else if (Failed == Result.Status())
-                            {
-                                // Error handling
-								std::stringstream msg_error("");
-								msg_error	<< "No image acquired!"
-                                            << " Error code : 0x"
-                                            << DEB_VAR1(hex)<< " "
-                                            << Result.GetErrorCode()
-                                            << " Error description : "
-                                            << Result.GetErrorDescription();
-								
-                                DEB_ERROR() <<msg_error.str();
-                                
-                                if(!m_cam.m_nb_frames) //Do not stop acquisition in "live" mode, just IGNORE  error
-                                {
-                                    m_cam.StreamGrabber_->QueueBuffer(Result.Handle(), NULL);
-                                }
-                                else            //in "snap" mode , acquisition must be stopped
-                                {
-                                    m_cam._setStatus(Camera::Fault,false);
-									REPORT_EVENT(msg_error.str())
-                                    continueAcq = false;									
-                                }
-                            }
-                        break;
-                    }
-                }
-                else
-                {
-                    // Timeout
-					std::stringstream msg_error("");					
-					msg_error <<"Timeout occurred!";
-                    DEB_ERROR() << msg_error.str();
-                    m_cam._setStatus(Camera::Fault,false);						
-					REPORT_EVENT(msg_error.str())
-                    continueAcq = false;					
-                }
-            }
-            m_cam._stopAcq(true);
-        }
-        catch (GenICam::GenericException &e)
-        {
-            // Error handling
-			std::stringstream msg_error("");
-			msg_error<<"GeniCam Error! "<< e.GetDescription();
-            DEB_ERROR() << msg_error.str();
-			REPORT_EVENT(msg_error.str())
-        }
+	try {
+	  CGrabResultPtr ptrGrabResult;
+	  bool continueAcq = true;
+	  uint8_t* pImageBuffer;
+	  m_cam._setStatus(Camera::Exposure,false);
+	  
+	  if (m_cam.m_video_flag_mode) {
+	    VideoMode mode;
+	    m_cam.m_video->getVideoMode(mode);
+	    
+	    while (m_cam.Camera_->IsGrabbing()) {
+	      if (!m_cam.Camera_->RetrieveResult(3000, ptrGrabResult, TimeoutHandling_ThrowException)) {
+		// Grabbing has been stopped
+		break;
+	      }
+	      if (ptrGrabResult->GrabSucceeded()) {
+		m_cam.m_video->callNewImage((char*)ptrGrabResult->GetBuffer(),
+					    ptrGrabResult->GetWidth(),
+					    ptrGrabResult->GetHeight(),
+					    mode);
+		++m_cam.m_image_number;
+	      }
+	    }
+	  }
+	  else {
+	    
+	    while (m_cam.Camera_->IsGrabbing()) {
+	      // Wait for an image and then retrieve it. A timeout of 3000 ms is used.
+	      if (! m_cam.Camera_->RetrieveResult(3000, ptrGrabResult, TimeoutHandling_ThrowException)) {
+		// Grabbing has been stopped
+		break;
+	      }
+	      if (ptrGrabResult->GrabSucceeded()) {
+		m_cam._setStatus(Camera::Readout, false);
+		// Access the image data.
+		pImageBuffer = (uint8_t*) ptrGrabResult->GetBuffer();
+		      
+		HwFrameInfoType frame_info;
+		frame_info.acq_frame_nb = m_cam.m_image_number;
+		void *framePt = buffer_mgr.getFrameBufferPtr(m_cam.m_image_number);
+		const FrameDim& fDim = buffer_mgr.getFrameDim();
+		void* srcPt = ((char*)pImageBuffer);
+		DEB_TRACE() << "memcpy:" << DEB_VAR2(srcPt,framePt);
+		memcpy(framePt,srcPt,fDim.getMemSize());
+		
+		continueAcq = buffer_mgr.newFrameReady(frame_info);                      
+		++m_cam.m_image_number;
+		      
+		// Camera.StopGrabbing() is called automatically by the RetrieveResult() method
+		// when c_countOfImagesToGrab images have been retrieved.
+	      }
+	    } // while (m_cam.Camera_->IsGrabbing())
+	  }
+	    
+	  m_cam._stopAcq(true);		
+	}
+        catch (Pylon::GenericException &e) {
+	  // Error handling
+	  DEB_ERROR() << "GeniCam Error! "<< e.GetDescription();
+	  m_cam._setStatus(Camera::Fault, true);
+	}
         aLock.lock();
         m_cam.m_wait_flag = true;
     }
@@ -720,7 +565,6 @@ Camera::_AcqThread::~_AcqThread()
 {
     AutoMutex aLock(m_cam.m_cond.mutex());
     m_cam.m_quit = true;
-    m_cam.WaitObject_.Signal();
     m_cam.m_cond.broadcast();
     aLock.unlock();
     
@@ -751,7 +595,7 @@ void Camera::getImageType(ImageType& type)
     {
         ps = Camera_->PixelFormat.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -803,31 +647,24 @@ void Camera::setImageType(ImageType type)
     DEB_MEMBER_FUNCT();
     try
     {
-        if ((GenApi::IsAvailable(Camera_->PixelFormat) && GenApi::IsWritable(Camera_->PixelFormat)))
+        switch( type )
         {
-            switch( type )
-            {
-                case Bpp8:
-                    this->Camera_->PixelFormat.SetValue(PixelFormat_Mono8);
-                    break;
-                case Bpp12:
-                    this->Camera_->PixelFormat.SetValue(PixelFormat_Mono12);
-                    break;
-                case Bpp16:
-                    this->Camera_->PixelFormat.SetValue(PixelFormat_Mono16);
-                    break;
+            case Bpp8:
+                this->Camera_->PixelFormat.SetValue(PixelFormat_Mono8);
+                break;
+            case Bpp12:
+                this->Camera_->PixelFormat.SetValue(PixelFormat_Mono12);
+                break;
+            case Bpp16:
+                this->Camera_->PixelFormat.SetValue(PixelFormat_Mono16);
+                break;
 
-                default:
-                    THROW_HW_ERROR(NotSupported) << "Cannot change the pixel format of the camera !";
-                    break;
-            }
-        }
-        else
-        {
-            DEB_TRACE() << "PixelFormat is Not Available or/and Not Writable !";
+            default:
+                THROW_HW_ERROR(NotSupported) << "Cannot change the pixel format of the camera !";
+                break;
         }
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
       // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -864,14 +701,6 @@ HwBufferCtrlObj* Camera::getBufferCtrlObj()
 //-----------------------------------------------------
 //
 //-----------------------------------------------------
-HwEventCtrlObj* Camera::getEventCtrlObj()
-{
-	return &m_event_ctrl_obj;
-}
-
-//-----------------------------------------------------
-//
-//-----------------------------------------------------
 void Camera::setTrigMode(TrigMode mode)
 {
     DEB_MEMBER_FUNCT();
@@ -893,13 +722,20 @@ void Camera::setTrigMode(TrigMode mode)
             //- INTERNAL
             this->Camera_->TriggerMode.SetValue( TriggerMode_Off );
             this->Camera_->ExposureMode.SetValue(ExposureMode_Timed);
-	    this->Camera_->AcquisitionFrameRateEnable.SetValue(true);
+	    // setExposure() can disable FrameRate if latency_time is ~0,
+	    // do not reenable FrameRate here if not required
+	    // and when cold start the camera can have the FrameRate enabled
+	    // from previous acquisition, so disable it if latency is 0
+	    if (m_latency_time >= 1e-6)
+	      this->Camera_->AcquisitionFrameRateEnable.SetValue(true);
+	    else
+	      this->Camera_->AcquisitionFrameRateEnable.SetValue(false);	    
 	}
         else if ( mode == IntTrigMult )
         {
 	    this->Camera_->TriggerMode.SetValue(TriggerMode_On);
 	    this->Camera_->TriggerSource.SetValue(TriggerSource_Software);
-	    this->Camera_->AcquisitionFrameCount.SetValue(1);
+            this->Camera_->AcquisitionFrameRateEnable.SetValue( false );
 	    this->Camera_->ExposureMode.SetValue(ExposureMode_Timed);
         }
         else if ( mode == ExtGate )
@@ -918,7 +754,7 @@ void Camera::setTrigMode(TrigMode mode)
             this->Camera_->ExposureMode.SetValue( ExposureMode_Timed );
         }
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -969,7 +805,7 @@ void Camera::_readTrigMode()
 	else
 	  m_trigger_mode = IntTrig;
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -986,14 +822,14 @@ void Camera::setTrigActivation(TrigActivation activation)
     DEB_MEMBER_FUNCT();
     try
     {
-        Basler_GigECamera::TriggerActivationEnums act =
-            static_cast<Basler_GigECamera::TriggerActivationEnums>(activation);
+        TriggerActivationEnums act =
+            static_cast<TriggerActivationEnums>(activation);
 
         // If the parameter TriggerActivation is available for this camera
         if (GenApi::IsAvailable(Camera_->TriggerActivation))
             Camera_->TriggerActivation.SetValue(act);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1007,7 +843,7 @@ void Camera::getTrigActivation(TrigActivation& activation) const
     DEB_MEMBER_FUNCT();
     try
     {
-        Basler_GigECamera::TriggerActivationEnums act;
+        TriggerActivationEnums act;
 
         // If the parameter AcquisitionFrameCount is available for this camera
         if (GenApi::IsAvailable(Camera_->TriggerActivation))
@@ -1016,7 +852,7 @@ void Camera::getTrigActivation(TrigActivation& activation) const
         activation = static_cast<TrigActivation>(act);
 
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1037,7 +873,8 @@ void Camera::setExpTime(double exp_time)
     try
     {
         if(mode !=  ExtGate) { // the expTime can not be set in ExtGate!
-            if (GenApi::IsAvailable(Camera_->ExposureTimeBaseAbs))
+            // ExposureTimeBaseAbs is only available for GigE Ace camera
+            if (IsAvailable(Camera_->ExposureTimeBaseAbs))
             {
                 //If scout or pilot, exposure time has to be adjusted using
                 // the exposure time base + the exposure time raw.
@@ -1047,14 +884,15 @@ void Camera::setExpTime(double exp_time)
                 Camera_->ExposureTimeRaw.SetValue(static_cast<int> (raw));
                 raw = static_cast<double> (Camera_->ExposureTimeRaw.GetValue());
                 Camera_->ExposureTimeBaseAbs.SetValue(1E6 * (exp_time / raw));
-		DEB_TRACE() << "raw = " << raw;
-		DEB_TRACE() << "ExposureTimeBaseAbs = " << (1E6 * (exp_time / raw));			
+                DEB_TRACE() << "raw = " << raw;
+                DEB_TRACE() << "ExposureTimeBaseAbs = " << (1E6 * (exp_time / raw));			
             }
             else
             {
-                // More recent model like ACE and AVIATOR support direct programming of the exposure using
-                // the exposure time absolute.
-                Camera_->ExposureTimeAbs.SetValue(1E6 * exp_time);
+	      if (IsAvailable(Camera_->ExposureTime) || m_is_usb)
+                    Camera_->ExposureTime.SetValue(1E6 * exp_time);
+                else
+                    Camera_->ExposureTimeAbs.SetValue(1E6 * exp_time);
             }
         }
         
@@ -1069,12 +907,12 @@ void Camera::setExpTime(double exp_time)
         {
             double periode = m_latency_time + m_exp_time;
             Camera_->AcquisitionFrameRateEnable.SetValue(true);
-            Camera_->AcquisitionFrameRateAbs.SetValue(1 / periode);
-            DEB_TRACE() << DEB_VAR1(Camera_->AcquisitionFrameRateAbs.GetValue());
+            Camera_->AcquisitionFrameRate.SetValue(1 / periode);
+            DEB_TRACE() << DEB_VAR1(Camera_->AcquisitionFrameRate.GetValue());
         }
 
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1089,10 +927,10 @@ void Camera::getExpTime(double& exp_time)
     DEB_MEMBER_FUNCT();
     try
     {
-        double value = 1.0E-6 * static_cast<double>(Camera_->ExposureTimeAbs.GetValue());    
+        double value = 1.0E-6 * static_cast<double>(Camera_->ExposureTime.GetValue());    
         exp_time = value;
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1130,7 +968,8 @@ void Camera::getExposureTimeRange(double& min_expo, double& max_expo) const
     try
     {
         // Pilot and and Scout do not have TimeAbs capability
-        if (GenApi::IsAvailable(Camera_->ExposureTimeBaseAbs))
+        // ExposureTimeBaseAbs is available fot GigE cams only
+        if (IsAvailable(Camera_->ExposureTimeBaseAbs) && !m_is_usb)
         {
             // memorize initial value of exposure time
             DEB_TRACE() << "memorize initial value of exposure time";
@@ -1158,11 +997,17 @@ void Camera::getExposureTimeRange(double& min_expo, double& max_expo) const
         }
         else
         {
-            min_expo = Camera_->ExposureTimeAbs.GetMin()*1e-6;
-            max_expo = Camera_->ExposureTimeAbs.GetMax()*1e-6;
+	  if (IsAvailable(Camera_->ExposureTime) || m_is_usb) {
+                min_expo = Camera_->ExposureTime.GetMin()*1e-6;
+                max_expo = Camera_->ExposureTime.GetMax()*1e-6;
+            } else {
+                min_expo = Camera_->ExposureTimeAbs.GetMin()*1e-6;
+                max_expo = Camera_->ExposureTimeAbs.GetMax()*1e-6;
+            }
+            
         }
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1181,13 +1026,18 @@ void Camera::getLatTimeRange(double& min_lat, double& max_lat) const
     try
     {
         min_lat = 0;
-        double minAcqFrameRate = Camera_->AcquisitionFrameRateAbs.GetMin();
+        double minAcqFrameRate = 0;
+
+        if (IsAvailable(Camera_->AcquisitionFrameRate) || m_is_usb)
+            minAcqFrameRate = Camera_->AcquisitionFrameRate.GetMin();
+        else
+            minAcqFrameRate = Camera_->AcquisitionFrameRateAbs.GetMin();
         if (minAcqFrameRate > 0)
             max_lat = 1 / minAcqFrameRate;
         else
             max_lat = 0;
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1233,7 +1083,7 @@ void Camera::getStatus(Camera::Status& status)
     AutoMutex aLock(m_cond.mutex());
     status = m_status;
     //Check if camera is not waiting for trigger
-    if(status == Camera::Exposure &&
+    if((status == Camera::Exposure || status == Camera::Readout) && 
        m_trigger_mode == IntTrigMult)
       {
 	// Check the frame start trigger acquisition status
@@ -1243,7 +1093,7 @@ void Camera::getStatus(Camera::Status& status)
 	// Read the acquisition status
 	bool IsWaitingForFrameTrigger = Camera_->AcquisitionStatus.GetValue();
 	status = IsWaitingForFrameTrigger ? Camera::Ready : status;
-	//DEB_TRACE() << DEB_VAR1(IsWaitingForFrameTrigger);
+	DEB_TRACE() << DEB_VAR1(IsWaitingForFrameTrigger);
       }
     DEB_RETURN() << DEB_VAR1(status);
 }
@@ -1267,9 +1117,12 @@ void Camera::getFrameRate(double& frame_rate) const
     DEB_MEMBER_FUNCT();
     try
     {
-        frame_rate = static_cast<double>(Camera_->ResultingFrameRateAbs.GetValue());        
+        if (m_is_usb)
+            frame_rate = static_cast<double>(Camera_->ResultingFrameRate.GetValue());        
+        else 
+            frame_rate = static_cast<double>(Camera_->ResultingFrameRateAbs.GetValue());        
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1317,7 +1170,7 @@ void Camera::checkRoi(const Roi& set_roi, Roi& hw_roi)
         else
             hw_roi = set_roi;
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1357,7 +1210,7 @@ void Camera::setRoi(const Roi& ask_roi)
             Camera_->OffsetY.SetValue(ask_roi.getTopLeft().y);
         }
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         try
         {
@@ -1368,7 +1221,7 @@ void Camera::setRoi(const Roi& ask_roi)
             Camera_->OffsetY.SetValue(r.getTopLeft().y);
             // Error handling
         }
-        catch (GenICam::GenericException &e2)
+        catch (Pylon::GenericException &e2)
         {
             THROW_HW_ERROR(Error) << e2.GetDescription();
         }
@@ -1393,7 +1246,7 @@ void Camera::getRoi(Roi& hw_roi)
         
         hw_roi = r;
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1418,7 +1271,7 @@ void Camera::checkBin(Bin &aBin)
             y = Camera_->BinningVertical.GetMax();
         aBin = Bin(x, y);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1436,7 +1289,7 @@ void Camera::setBin(const Bin &aBin)
         Camera_->BinningVertical.SetValue(aBin.getY());
         Camera_->BinningHorizontal.SetValue(aBin.getX());
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1454,7 +1307,7 @@ void Camera::getBin(Bin &aBin)
     {
       aBin = Bin(Camera_->BinningHorizontal.GetValue(), Camera_->BinningVertical.GetValue());
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1474,7 +1327,7 @@ bool Camera::isBinningAvailable() const
       isAvailable = (GenApi::IsAvailable(Camera_->BinningVertical) &&
 		     GenApi::IsAvailable(Camera_->BinningHorizontal));
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1491,12 +1344,12 @@ bool Camera::isRoiAvailable() const
   bool isAvailable = false;
   try
     {
-      isAvailable = (GenApi::IsAvailable(Camera_->OffsetX) && GenApi::IsWritable(Camera_->OffsetX) &&
-		     GenApi::IsAvailable(Camera_->OffsetY) && GenApi::IsWritable(Camera_->OffsetY) &&
-		     GenApi::IsAvailable(Camera_->Width) && GenApi::IsWritable(Camera_->Width) &&
-		     GenApi::IsAvailable(Camera_->Height) && GenApi::IsWritable(Camera_->Height));
+      isAvailable = (IsAvailable(Camera_->OffsetX) && IsWritable(Camera_->OffsetX) &&
+		     IsAvailable(Camera_->OffsetY) && IsWritable(Camera_->OffsetY) &&
+		     IsAvailable(Camera_->Width) && IsWritable(Camera_->Width) &&
+		     IsAvailable(Camera_->Height) && IsWritable(Camera_->Height));
     }
-  catch(GenICam::GenericException &e)
+  catch(Pylon::GenericException &e)
     {
       DEB_WARNING() << e.GetDescription();
     }
@@ -1516,7 +1369,7 @@ void Camera::setPacketSize(int isize)
     {
         Camera_->GevSCPSPacketSize.SetValue(isize);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1532,7 +1385,7 @@ void Camera::getPacketSize(int& isize)
     {
         isize = Camera_->GevSCPSPacketSize.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1550,7 +1403,7 @@ void Camera::setInterPacketDelay(int ipd)
     {
         Camera_->GevSCPD.SetValue(ipd);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1566,7 +1419,7 @@ void Camera::getInterPacketDelay(int& ipd)
     {
         ipd = Camera_->GevSCPD.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1610,7 +1463,7 @@ void Camera::getBandwidthAssigned(int& ipd)
     {
         ipd = Camera_->GevSCBWA.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1625,7 +1478,7 @@ void Camera::getMaxThroughput(int& ipd)
     {
         ipd = Camera_->GevSCDMT.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1641,7 +1494,7 @@ void Camera::getCurrentThroughput(int& ipd)
     {
         ipd = Camera_->GevSCDCT.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1667,8 +1520,12 @@ void Camera::getTemperature(double& temperature)
         // If the parameter TemperatureAbs is available for this camera
         if (GenApi::IsAvailable(Camera_->TemperatureAbs))
             temperature = Camera_->TemperatureAbs.GetValue();
+	// new cameras like ACE2 have 2 temperatures one for coreboard and one for sensor
+	// to change measurement DeviceTemperatureSelector should be call
+	else if (IsAvailable(Camera_->DeviceTemperature))
+	  temperature = Camera_->DeviceTemperature.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1696,7 +1553,7 @@ void Camera::setAutoGain(bool auto_gain)
             }
         }
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1720,14 +1577,13 @@ void Camera::getAutoGain(bool& auto_gain) const
 //			THROW_HW_ERROR(Error)<<"GainAuto Parameter is not Available !";			
         }
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
 
     DEB_RETURN() << DEB_VAR1(auto_gain);
 }
-
 
 //-----------------------------------------------------
 //
@@ -1736,42 +1592,39 @@ void Camera::setGain(double gain)
 {
     DEB_MEMBER_FUNCT();
     DEB_PARAM() << DEB_VAR1(gain);
+    int raw_gain, low_limit, high_limit;
+    if (gain < 0. || gain > 1.)
+      THROW_HW_ERROR(InvalidValue) << "Gain must be in range <0.0,1.0>";
     try
     {
         // you want to set the gain, remove autogain
         if (GenApi::IsAvailable(Camera_->GainAuto))
         {		
-			setAutoGain(false);
-		}
-		
-        if (GenApi::IsWritable(Camera_->GainRaw) && GenApi::IsAvailable(Camera_->GainRaw))
-        {
+	    setAutoGain(false);
+	}
 
-            int low_limit = Camera_->GainRaw.GetMin();
-            DEB_TRACE() << "low_limit = " << low_limit;
-
-            int hight_limit = Camera_->GainRaw.GetMax();
-            DEB_TRACE() << "hight_limit = " << hight_limit;
-
-            int gain_raw = int((hight_limit - low_limit) * gain + low_limit);
-
-            if (gain_raw < low_limit)
-            {
-                gain_raw = low_limit;
-            }
-            else if (gain_raw > hight_limit)
-            {
-                gain_raw = hight_limit;
-            }
-            Camera_->GainRaw.SetValue(gain_raw);
-            DEB_TRACE() << "gain_raw = " << gain_raw;
+	if (Camera_->GetSfncVersion() >= Sfnc_2_0_0) {
+	    Camera_->GainSelector.SetValue(GainSelector_All);
+	    
+            low_limit = Camera_->Gain.GetMin();
+            high_limit = Camera_->Gain.GetMax();
+            raw_gain = int((high_limit - low_limit) * gain + low_limit);
+            Camera_->Gain.SetValue(raw_gain);
         }
-		else
-		{
-			THROW_HW_ERROR(Error)<<"GainRaw Parameter is not Available !";
-		}
+        else
+        {
+            Camera_->GainSelector.SetValue(GainSelector_All);
+	    
+            low_limit = Camera_->GainRaw.GetMin();
+            high_limit = Camera_->GainRaw.GetMax();
+            raw_gain = int((high_limit - low_limit) * gain + low_limit);
+            Camera_->GainRaw.SetValue(raw_gain);
+        }
+	DEB_TRACE() << "low_limit   = " << low_limit;
+	DEB_TRACE() << "high_limit = " << high_limit;
+	DEB_TRACE() << "raw_gain    = " << raw_gain;
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();		
@@ -1784,22 +1637,25 @@ void Camera::setGain(double gain)
 void Camera::getGain(double& gain) const
 {
     DEB_MEMBER_FUNCT();
+    int raw_gain, low_limit, high_limit;
+    
     try
     {
-        if (GenApi::IsAvailable(Camera_->GainRaw))
-        {
-            int gain_raw = Camera_->GainRaw.GetValue();
-            int low_limit = Camera_->GainRaw.GetMin();
-            int hight_limit = Camera_->GainRaw.GetMax();
-
-            gain = double(gain_raw - low_limit) / (hight_limit - low_limit);
+        if (Camera_->GetSfncVersion() >= Sfnc_2_0_0) {
+            raw_gain = Camera_->Gain.GetValue();
+	    low_limit = Camera_->Gain.GetMin();
+            high_limit = Camera_->Gain.GetMax();
+        } else {
+            raw_gain = Camera_->GainRaw.GetValue();
+            low_limit = Camera_->GainRaw.GetMin();
+	    high_limit = Camera_->GainRaw.GetMax();
         }
-        else
-        {
-            gain = 0.;
-        }
+	DEB_TRACE() << "low_limit = " << low_limit;
+	DEB_TRACE() << "high_limit = " << high_limit;
+	DEB_TRACE() << "raw_gain    = " << raw_gain;
+	gain = double(raw_gain - low_limit)/double(high_limit - low_limit);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1816,15 +1672,106 @@ void Camera::setFrameTransmissionDelay(int ftd)
     DEB_PARAM() << DEB_VAR1(ftd);
     try
     {
-        Camera_->GevSCFTD.SetValue(ftd);
+        if (!m_is_usb)
+            Camera_->GevSCFTD.SetValue(ftd);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
 }
 
+//--------------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::setAcquisitionFrameRateEnable(bool AFRE)
+{
+    DEB_MEMBER_FUNCT();
+    DEB_PARAM() << DEB_VAR1(AFRE);
+    try
+    {
+        Camera_->AcquisitionFrameRateEnable.SetValue(AFRE);
+    }
+    catch (Pylon::GenericException &e)
+    {
+        // Error handling
+        THROW_HW_ERROR(Error) << e.GetDescription();
+    }
+}
+
+//--------------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::getAcquisitionFrameRateEnable(bool& AFRE) const
+{
+    DEB_MEMBER_FUNCT();
+    DEB_PARAM() << DEB_VAR1(AFRE);
+    try
+    {
+        if (GenApi::IsAvailable(Camera_->AcquisitionFrameRateEnable))
+        {
+            AFRE  = Camera_->AcquisitionFrameRateEnable.GetValue();
+        }
+        else
+        {
+            AFRE = false;
+			THROW_HW_ERROR(Error)<<"AcquisitionFrameRateEnable Parameter is not Available !";
+        }
+    }
+    catch (Pylon::GenericException &e)
+    {
+        // Error handling
+        THROW_HW_ERROR(Error) << e.GetDescription();
+    }
+        DEB_RETURN() << DEB_VAR1(AFRE);
+
+}
+//--------------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::setAcquisitionFrameRateAbs(int AFRA)
+{
+    DEB_MEMBER_FUNCT();
+    DEB_PARAM() << DEB_VAR1(AFRA);
+    try
+    {
+        Camera_->AcquisitionFrameRateAbs.SetValue(AFRA);
+    }
+    catch (Pylon::GenericException &e)
+    {
+        // Error handling
+        THROW_HW_ERROR(Error) << e.GetDescription();
+    }
+}
+
+//--------------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::getAcquisitionFrameRateAbs(int& AFRA) const
+{
+    DEB_MEMBER_FUNCT();
+    DEB_PARAM() << DEB_VAR1(AFRA);
+    try
+    {
+        if (GenApi::IsAvailable(Camera_->AcquisitionFrameRateAbs))
+        {
+        AFRA  = Camera_->AcquisitionFrameRateAbs.GetValue();
+        }
+        else
+        {
+            AFRA = false;
+			THROW_HW_ERROR(Error)<<"AcquisitionFrameRateAbs Parameter is not Available !";
+        }
+    }
+    catch (Pylon::GenericException &e)
+    {
+        // Error handling
+        THROW_HW_ERROR(Error) << e.GetDescription();
+    }
+        DEB_RETURN() << DEB_VAR1(AFRA);
+
+}
 //---------------------------
 //- Camera::reset()
 //---------------------------
@@ -1835,7 +1782,7 @@ void Camera::reset()
     {
         _stopAcq(false);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
@@ -1856,7 +1803,11 @@ void Camera::setOutput1LineSource(Camera::LineSource source)
 {
   DEB_MEMBER_FUNCT();
   DEB_PARAM() << DEB_VAR1(source);
-
+  if (!IsAvailable(Camera_->LineSelector) || !IsAvailable(Camera_->LineSource))
+    {
+       THROW_HW_ERROR(NotSupported) << "This camera model does not support LineSource and/or LineSelector";
+    }
+  
   Camera_->LineSelector.SetValue(LineSelector_Out1);
 
   LineSourceEnums line_src;
@@ -1887,7 +1838,7 @@ void Camera::setOutput1LineSource(Camera::LineSource source)
     case Camera::PatternGenerator4:		line_src = LineSource_PatternGenerator4;	break;
     case Camera::AcquisitionTriggerReady:	line_src = LineSource_AcquisitionTriggerReady;	break;
     default:
-      THROW_HW_ERROR(NotSupported) << "Not yet managed";
+      THROW_HW_ERROR(NotSupported) << "Not yet supported";
     }
   Camera_->LineSource.SetValue(line_src);
 }
@@ -1896,6 +1847,12 @@ void Camera::getOutput1LineSource(Camera::LineSource& source) const
 {
   DEB_MEMBER_FUNCT();
 
+  if (!IsAvailable(Camera_->LineSelector) || !IsAvailable(Camera_->LineSource))
+    {
+      source = Off;
+      return;
+    }
+      
   Camera_->LineSelector.SetValue(LineSelector_Out1);
   switch(Camera_->LineSource.GetValue())
     {
@@ -1942,7 +1899,7 @@ void Camera::setAcquisitionFrameCount(int AFC)
         if (GenApi::IsAvailable(Camera_->AcquisitionFrameCount))
             Camera_->AcquisitionFrameCount.SetValue(AFC);
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1960,7 +1917,7 @@ void Camera::getAcquisitionFrameCount(int& AFC) const
         if (GenApi::IsAvailable(Camera_->AcquisitionFrameCount))
            AFC = Camera_->AcquisitionFrameCount.GetValue();
     }
-    catch (GenICam::GenericException &e)
+    catch (Pylon::GenericException &e)
     {
         DEB_WARNING() << e.GetDescription();
     }
@@ -1974,10 +1931,7 @@ void Camera::getAcquisitionFrameCount(int& AFC) const
 void Camera::getStatisticsTotalBufferCount(long& count)
 {
 	DEB_MEMBER_FUNCT();
-	if(StreamGrabber_ != NULL)
-		count = StreamGrabber_->Statistic_Total_Buffer_Count.GetValue();
-	else
-		count = -1;//Because Not valid when acquisition is stopped
+	count = Camera_->GetStreamGrabberParams().Statistic_Total_Buffer_Count.GetValue();
 }
 
 //---------------------------    
@@ -1987,9 +1941,58 @@ void Camera::getStatisticsTotalBufferCount(long& count)
 void Camera::getStatisticsFailedBufferCount(long& count)
 {
 	DEB_MEMBER_FUNCT();
-	if(StreamGrabber_ != NULL)
-		count = StreamGrabber_->Statistic_Failed_Buffer_Count.GetValue();
+	count = Camera_->GetStreamGrabberParams().Statistic_Failed_Buffer_Count.GetValue();
+}
+//---------------------------    
+
+
+//-----------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::setTestImageSelector(TestImageSelector sel)
+{
+    DEB_MEMBER_FUNCT();
+
+    if (GenApi::IsAvailable(Camera_->TestImageSelector))
+      {
+	THROW_HW_ERROR(NotSupported) << "This camera model does not support TestImageSelector";
+      }
+
+    try
+    {
+        TestImageSelectorEnums test =
+	  static_cast<TestImageSelectorEnums>(sel);
+	Camera_->TestImageSelector.SetValue(test);
+    }
+    catch (Pylon::GenericException &e)
+    {
+        DEB_WARNING() << e.GetDescription();
+    }
+}
+
+//-----------------------------------------------------
+//
+//-----------------------------------------------------
+void Camera::getTestImageSelector(TestImageSelector& sel) const
+{
+    DEB_MEMBER_FUNCT();
+    try
+    {
+        TestImageSelectorEnums test;
+
+        // If the parameter TestImage is available for this camera
+        if (GenApi::IsAvailable(Camera_->TestImageSelector))
+	  {
+            test = Camera_->TestImageSelector.GetValue();
+	    sel = static_cast<TestImageSelector>(test);
+	  }
 	else
-		count = -1;//Because Not valid when acquisition is stopped
+	  sel = TestImage_Off;
+
+    }
+    catch (Pylon::GenericException &e)
+    {
+        DEB_WARNING() << e.GetDescription();
+    }
 }
 //---------------------------    
