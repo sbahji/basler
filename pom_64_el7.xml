@@ -16,7 +16,7 @@
     <description>This module controls the Basler Camera</description>
     
 	<properties>
-        <libs-pylon>/usr/Local/pylonSDK/pylon6-6.3.0-23157</libs-pylon><!--/home/informatique/ica/bahji/tmp_sba/pylon_6.3.0/-->
+        <libs-pylon>/usr/Local/pylonSDK/pylon6-6.3.0-23157</libs-pylon>
 	</properties>
 	
     <scm>
@@ -32,11 +32,6 @@
 			<version>1.7.9</version>
         </dependency>
 
-        <!--<dependency>
-            <groupId>com.basler</groupId>
-            <artifactId>Pylon-${aol}-shared-${mode}</artifactId>
-            <version>5.0.5</version>
-        </dependency> -->
     </dependencies>
 
     <build>
@@ -60,30 +55,6 @@
                         </options>
                     </cpp>
 					
-					<!--<linker>
-					<libs>						
-						 <lib>
-							<name>pylonbase-5.0.5</name>
-							<type>shared</type>
-							<directory>${libs-pylon}/lib/</directory>
-						</lib>
-						<lib>
-							<name>GenApi_gcc_v3_0_Basler_pylon_v5_0</name>
-							<type>shared</type>
-							<directory>${libs-pylon}/lib/</directory>
-						</lib>
-						<lib>
-							<name>GCBase_gcc_v3_0_Basler_pylon_v5_0</name>
-							<type>shared</type>
-							<directory>${libs-pylon}/lib/</directory>
-						</lib>
-						<lib>
-							<name>Log_gcc_v3_0_Basler_pylon_v5_0</name>
-							<type>shared</type>
-							<directory>${libs-pylon}/lib/</directory>
-						</lib>	               
-					</libs>-->
-					 <!-- new sba-->
 					<linker>
 					<libs>						
 						 <lib>

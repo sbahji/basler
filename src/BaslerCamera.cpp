@@ -1029,9 +1029,16 @@ void Camera::getLatTimeRange(double& min_lat, double& max_lat) const
         double minAcqFrameRate = 0;
 
         if (IsAvailable(Camera_->AcquisitionFrameRate) || m_is_usb)
+        {
             minAcqFrameRate = Camera_->AcquisitionFrameRate.GetMin();
+        }
         else
-            minAcqFrameRate = Camera_->AcquisitionFrameRateAbs.GetMin();
+        {
+            if (GenApi::IsAvailable(Camera_->AcquisitionFrameRateAbs))
+            {
+                minAcqFrameRate = Camera_->AcquisitionFrameRateAbs.GetMin();
+            }
+        }
         if (minAcqFrameRate > 0)
             max_lat = 1 / minAcqFrameRate;
         else
