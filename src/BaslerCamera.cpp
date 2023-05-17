@@ -191,9 +191,9 @@ Camera::Camera(const std::string& camera_id,int packet_size,int receive_priority
         DEB_TRACE() << "Open camera";        
         Camera_->Open();
     
-        if(packet_size > 0 && !m_is_usb) {
-          Camera_->GevSCPSPacketSize.SetValue(1000);
-
+        if(packet_size > 0 && !m_is_usb) 
+        {
+          Camera_->GevSCPSPacketSize.SetValue(packet_size);
         }
     
         // Set the image format and AOI
