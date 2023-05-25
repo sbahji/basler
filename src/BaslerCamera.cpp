@@ -753,6 +753,7 @@ void Camera::getImageType(ImageType& type)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -829,6 +830,7 @@ void Camera::setImageType(ImageType type)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
       // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -920,6 +922,7 @@ void Camera::setTrigMode(TrigMode mode)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -971,6 +974,7 @@ void Camera::_readTrigMode()
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }        
@@ -1076,6 +1080,7 @@ void Camera::setExpTime(double exp_time)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -1094,6 +1099,7 @@ void Camera::getExpTime(double& exp_time)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }            
@@ -1123,7 +1129,7 @@ void Camera::getLatTime(double& lat_time)
 //-----------------------------------------------------
 //
 //-----------------------------------------------------
-void Camera::getExposureTimeRange(double& min_expo, double& max_expo) const
+void Camera::getExposureTimeRange(double& min_expo, double& max_expo)
 {
     DEB_MEMBER_FUNCT();
 
@@ -1164,6 +1170,7 @@ void Camera::getExposureTimeRange(double& min_expo, double& max_expo) const
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -1175,7 +1182,7 @@ void Camera::getExposureTimeRange(double& min_expo, double& max_expo) const
 //-----------------------------------------------------
 //
 //-----------------------------------------------------
-void Camera::getLatTimeRange(double& min_lat, double& max_lat) const
+void Camera::getLatTimeRange(double& min_lat, double& max_lat)
 {
     DEB_MEMBER_FUNCT();
     try
@@ -1189,6 +1196,7 @@ void Camera::getLatTimeRange(double& min_lat, double& max_lat) const
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -1262,7 +1270,7 @@ void Camera::_setStatus(Camera::Status status,bool force)
 //-----------------------------------------------------
 //
 //-----------------------------------------------------
-void Camera::getFrameRate(double& frame_rate) const
+void Camera::getFrameRate(double& frame_rate)
 {
     DEB_MEMBER_FUNCT();
     try
@@ -1271,6 +1279,7 @@ void Camera::getFrameRate(double& frame_rate) const
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }        
@@ -1370,8 +1379,10 @@ void Camera::setRoi(const Roi& ask_roi)
         }
         catch (GenICam::GenericException &e2)
         {
+            _setStatus(Camera::Fault,false);
             THROW_HW_ERROR(Error) << e2.GetDescription();
         }
+        _setStatus(Camera::Fault,false);
         THROW_HW_ERROR(Error) << e.GetDescription();
     }        
 
@@ -1395,6 +1406,7 @@ void Camera::getRoi(Roi& hw_roi)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }    
@@ -1420,6 +1432,7 @@ void Camera::checkBin(Bin &aBin)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -1438,6 +1451,7 @@ void Camera::setBin(const Bin &aBin)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -1456,6 +1470,7 @@ void Camera::getBin(Bin &aBin)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
@@ -1773,6 +1788,7 @@ void Camera::setGain(double gain)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);						
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();		
     }
@@ -1781,7 +1797,7 @@ void Camera::setGain(double gain)
 //-----------------------------------------------------
 //
 //-----------------------------------------------------
-void Camera::getGain(double& gain) const
+void Camera::getGain(double& gain)
 {
     DEB_MEMBER_FUNCT();
     try
@@ -1801,8 +1817,10 @@ void Camera::getGain(double& gain) const
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);						
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
+       
     }
     DEB_RETURN() << DEB_VAR1(gain);
 }
@@ -1820,6 +1838,7 @@ void Camera::setFrameTransmissionDelay(int ftd)
     }
     catch (GenICam::GenericException &e)
     {
+        _setStatus(Camera::Fault,false);						
         // Error handling
         THROW_HW_ERROR(Error) << e.GetDescription();
     }
