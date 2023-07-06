@@ -1449,6 +1449,15 @@ bool Camera::isGainAvailable() const
     return GenApi::IsAvailable(Camera_->Gain);
 }
 
+//-----------------------------------------------------
+// isBandWidthAssigned
+//-----------------------------------------------------
+bool Camera::isBandWidthAssigned() const
+{
+    //ACE2
+    return GenApi::IsAvailable(Camera_->GevSCBWA);
+}
+
 
 //-----------------------------------------------------
 // isAutoGainAvailable
