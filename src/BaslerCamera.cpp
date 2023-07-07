@@ -1124,10 +1124,8 @@ void Camera::getFrameRate(double& frame_rate) const
     DEB_MEMBER_FUNCT();
     try
     {
-        if (m_is_usb)
-            frame_rate = static_cast<double>(Camera_->ResultingFrameRate.GetValue());        
-        else 
-            frame_rate = static_cast<double>(Camera_->ResultingFrameRateAbs.GetValue());        
+        //ACE2
+        frame_rate = static_cast<double>(Camera_->BslResultingAcquisitionFrameRate.GetValue()); 
     }
     catch (Pylon::GenericException &e)
     {
@@ -1447,7 +1445,17 @@ void Camera::setSocketBufferSize(int sbs)
 //-----------------------------------------------------
 bool Camera::isGainAvailable() const
 {
-    return GenApi::IsAvailable(Camera_->GainRaw);
+    //ACE2
+    return GenApi::IsAvailable(Camera_->Gain);
+}
+
+//-----------------------------------------------------
+// isBandWidthAssigned
+//-----------------------------------------------------
+bool Camera::isBandWidthAssigned() const
+{
+    //ACE2
+    return GenApi::IsAvailable(Camera_->GevSCBWA);
 }
 
 
@@ -1472,7 +1480,8 @@ void Camera::getBandwidthAssigned(int& ipd)
     }
     catch (Pylon::GenericException &e)
     {
-        DEB_WARNING() << e.GetDescription();
+        // Error handling
+        THROW_HW_ERROR(Error) << e.GetDescription();
     }
 }   
 //-----------------------------------------------------
@@ -1483,7 +1492,8 @@ void Camera::getMaxThroughput(int& ipd)
     DEB_MEMBER_FUNCT();
     try
     {
-        ipd = Camera_->GevSCDMT.GetValue();
+        //ACE2
+        ipd = Camera_->DeviceLinkThroughputLimit.GetValue();
     }
     catch (Pylon::GenericException &e)
     {
@@ -1499,7 +1509,8 @@ void Camera::getCurrentThroughput(int& ipd)
     DEB_MEMBER_FUNCT();
     try
     {
-        ipd = Camera_->GevSCDCT.GetValue();
+        //ACE2
+        ipd = Camera_->BslDeviceLinkCurrentThroughput.GetValue();
     }
     catch (Pylon::GenericException &e)
     {
@@ -1526,11 +1537,16 @@ void Camera::getTemperature(double& temperature)
     {
         // If the parameter TemperatureAbs is available for this camera
         if (GenApi::IsAvailable(Camera_->TemperatureAbs))
+        {
             temperature = Camera_->TemperatureAbs.GetValue();
-	// new cameras like ACE2 have 2 temperatures one for coreboard and one for sensor
-	// to change measurement DeviceTemperatureSelector should be call
-	else if (IsAvailable(Camera_->DeviceTemperature))
-	  temperature = Camera_->DeviceTemperature.GetValue();
+        }
+        // new cameras like ACE2 have 2 temperatures one for coreboard and one for sensor
+        // to change measurement DeviceTemperatureSelector should be call
+        else if (IsAvailable(Camera_->DeviceTemperature))
+        {
+			//ACE2
+            temperature = Camera_->DeviceTemperature.GetValue();
+        }
     }
     catch (Pylon::GenericException &e)
     {
@@ -1607,12 +1623,12 @@ void Camera::setGain(double gain)
         // you want to set the gain, remove autogain
         if (GenApi::IsAvailable(Camera_->GainAuto))
         {		
-	    setAutoGain(false);
-	}
+	        setAutoGain(false);
+	    }
 
-	if (Camera_->GetSfncVersion() >= Sfnc_2_0_0) {
-	    Camera_->GainSelector.SetValue(GainSelector_All);
-	    
+	    if (Camera_->GetSfncVersion() >= Sfnc_2_0_0) 
+        {
+	        //ACE2
             low_limit = Camera_->Gain.GetMin();
             high_limit = Camera_->Gain.GetMax();
             raw_gain = int((high_limit - low_limit) * gain + low_limit);
@@ -1627,9 +1643,9 @@ void Camera::setGain(double gain)
             raw_gain = int((high_limit - low_limit) * gain + low_limit);
             Camera_->GainRaw.SetValue(raw_gain);
         }
-	DEB_TRACE() << "low_limit   = " << low_limit;
-	DEB_TRACE() << "high_limit = " << high_limit;
-	DEB_TRACE() << "raw_gain    = " << raw_gain;
+        DEB_TRACE() << "low_limit   = " << low_limit;
+        DEB_TRACE() << "high_limit = " << high_limit;
+        DEB_TRACE() << "raw_gain    = " << raw_gain;
     }
     catch (Pylon::GenericException &e)
     {
@@ -1648,19 +1664,25 @@ void Camera::getGain(double& gain) const
     
     try
     {
-        if (Camera_->GetSfncVersion() >= Sfnc_2_0_0) {
+        if (Camera_->GetSfncVersion() >= Sfnc_2_0_0) 
+        {
+            //ACE2
             raw_gain = Camera_->Gain.GetValue();
-	    low_limit = Camera_->Gain.GetMin();
+	        low_limit = Camera_->Gain.GetMin();
             high_limit = Camera_->Gain.GetMax();
-        } else {
+        } 
+        else 
+        {
             raw_gain = Camera_->GainRaw.GetValue();
             low_limit = Camera_->GainRaw.GetMin();
-	    high_limit = Camera_->GainRaw.GetMax();
+	        high_limit = Camera_->GainRaw.GetMax();
         }
-	DEB_TRACE() << "low_limit = " << low_limit;
-	DEB_TRACE() << "high_limit = " << high_limit;
-	DEB_TRACE() << "raw_gain    = " << raw_gain;
-	gain = double(raw_gain - low_limit)/double(high_limit - low_limit);
+        
+        DEB_TRACE() << "low_limit = " << low_limit;
+        DEB_TRACE() << "high_limit = " << high_limit;
+        DEB_TRACE() << "raw_gain    = " << raw_gain;
+        gain = double(raw_gain - low_limit)/double(high_limit - low_limit);
+
     }
     catch (Pylon::GenericException &e)
     {

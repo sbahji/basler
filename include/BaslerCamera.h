@@ -200,6 +200,8 @@ class LIBBASLER_API Camera
     // -- Pylon test image selectors
     void setTestImageSelector(TestImageSelector sel);
     void getTestImageSelector(TestImageSelector& sel) const;
+
+    bool isBandWidthAssigned() const;
     
  private:
     enum BufferMode {TmpBuffer, SoftBuffer};
