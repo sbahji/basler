@@ -127,8 +127,8 @@ class LIBBASLER_API Camera
     void setLatTime(double  lat_time);
     void getLatTime(double& lat_time);
 
-    void getExposureTimeRange(double& min_expo, double& max_expo) const;
-    void getLatTimeRange(double& min_lat, double& max_lat) const;    
+    void getExposureTimeRange(double& min_expo, double& max_expo);
+    void getLatTimeRange(double& min_lat, double& max_lat);    
 
     void setNbFrames(int  nb_frames);
     void getNbFrames(int& nb_frames);
@@ -158,7 +158,7 @@ class LIBBASLER_API Camera
     void setFrameTransmissionDelay(int ftd);
 
     // -- basler specific, LIMA don't worry about it !
-    void getFrameRate(double& frame_rate) const;
+    void getFrameRate(double& frame_rate);
     bool isBinningAvailable() const;
     bool isRoiAvailable() const;
     void setTimeout(int TO);
@@ -166,7 +166,7 @@ class LIBBASLER_API Camera
 
     bool isGainAvailable() const;
     void setGain(double gain);
-    void getGain(double& gain) const;
+    void getGain(double& gain);
 
     bool isAutoGainAvailable() const;
     void setAutoGain(bool auto_gain);
